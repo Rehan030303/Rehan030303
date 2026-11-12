@@ -131,7 +131,7 @@ echo "<input type = 'submit' value = 'Rename'></form>\n";
 }
 else {
 if (rename ($old, $new)){
-echo "File/Directory renamed successfully.<p>\n";
+echo "File/Directory renamed succ-essfully.<p>\n";
 }
 else {
 echo "Unable to rename " . $old . ".<p>\n";
